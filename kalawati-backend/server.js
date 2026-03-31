@@ -10,7 +10,7 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: "http://localhost:5173",
+  origin: "http://localhost:5175",
   credentials: true
 }));
 app.use(express.json());
@@ -23,6 +23,7 @@ app.use("/api/gallery",  require("./routes/galleryRoutes"));
 app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/content",  require("./routes/contentRoutes"));
 app.use("/api/users",    require("./routes/userRoutes"));
+app.use(require("./routes/smsRoutes"));
 
 // Health check
 app.get("/", (req, res) => res.json({ message: "Kalawati API running ✓" }));
