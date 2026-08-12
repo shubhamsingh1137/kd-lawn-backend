@@ -33,6 +33,19 @@ const protect = async (req, res, next) => {
   }
 };
 
+const optionalAuth = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      req.user = await User.findById(decoded.id).select("-password");
+    }
+  } catch (_) {
+    // Token nahi hai ya invalid — theek hai, guest hai
+  }
+  next();
+};
+
 // Admin only
 const adminOnly = (req, res, next) => {
   if (req.user && req.user.role === "admin") {
@@ -42,4 +55,4 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-module.exports = { protect, adminOnly };
+module.exports = { protect, optionalAuth, adminOnly };

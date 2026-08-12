@@ -27,29 +27,54 @@ const bookingSchema = new mongoose.Schema(
       min: 1,
     },
     totalAmount: {
-      type: Number,
-      required: true,
-    },
-    advanceAmount: {
-      type: Number,
-      default: 0,
-    },
-    status: {
-      type: String,
-      enum: ["pending", "confirmed", "rejected", "cancelled", "completed"],
-      default: "pending",
-    },
-    specialRequests: {
-      type: String,
-      trim: true,
-    },
-    adminNote: {
-      type: String,
-      trim: true,
-    },
-    contactName: { type: String, required: true },
-    contactPhone: { type: String, required: true },
-    contactEmail: { type: String, required: true },
+  type: Number,
+  required: true,
+},
+
+status: {
+  type: String,
+  enum: [
+    "pending",
+    "confirmed",
+    "rejected",
+    "cancelled",
+    "completed",
+  ],
+  default: "pending",
+},
+
+advanceAmount: {
+  type: Number,
+  default: 0,
+},
+
+remainingAmount: {
+  type: Number,
+  default: 0,
+},
+
+paymentStatus: {
+  type: String,
+  enum: ["unpaid", "advance_paid", "fully_paid"],
+  default: "unpaid",
+},
+
+razorpayOrderId: {
+  type: String,
+},
+
+razorpayPaymentId: {
+  type: String,
+},
+
+razorpaySignature: {
+  type: String,
+},
+    specialRequests: { type: String, trim: true },
+    adminNote:       { type: String, trim: true },
+    contactName:     { type: String, required: true },
+    contactPhone:    { type: String, required: true },
+    contactEmail:    { type: String },   
   },
   { timestamps: true }
 );

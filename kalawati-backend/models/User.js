@@ -8,13 +8,13 @@ const userSchema = new mongoose.Schema(
       required: [true, "Name is required"],
       trim: true,
     },
-    email: {
-      type: String,
-      required: [true, "Email is required"],
-      unique: true,
-      lowercase: true,
-      trim: true,
-    },
+   email: {
+  type: String,
+  unique: true,
+  sparse: true, // 👈 important (allows null unique)
+  lowercase: true,
+  trim: true,
+},
     phone: {
       type: String,
       required: [true, "Phone number is required"],
@@ -22,7 +22,7 @@ const userSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: [true, "Password is required"],
+      //required: [true, "Password is required"],
       minlength: 6,
       select: false,
     },
@@ -31,11 +31,19 @@ const userSchema = new mongoose.Schema(
       enum: ["user", "admin"],
       default: "user",
     },
+    isGuest: {
+  type: Boolean,
+  default: false,
+},
     isBlocked: {
       type: Boolean,
       default: false,
     },
+     // ✅ NEW — OTP fields
+    otp:       { type: String, select: false },
+    otpExpiry: { type: Date,   select: false },
   },
+  
   { timestamps: true }
 );
 
