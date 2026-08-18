@@ -3,7 +3,7 @@ const router  = express.Router();
 const {
   createBooking, getMyBookings, cancelBooking,
   getAllBookings, updateBookingStatus, getBookingStats,trackBookingByPhone , getBookedDates,createPaymentOrder,
-  verifyPayment,getBookingById, getAdminBookingById,
+  verifyPayment,getBookingById, getAdminBookingById, deleteBooking
 } = require("../controllers/bookingController");
 const { protect, optionalAuth, adminOnly } = require("../middleware/authMiddleware");
 
@@ -31,5 +31,6 @@ router.get("/admin/all",       protect, adminOnly, getAllBookings);
 router.get("/admin/stats",     protect, adminOnly, getBookingStats);
 router.patch("/admin/:id/status", protect, adminOnly, updateBookingStatus);
 router.get("/admin/:id",protect,adminOnly,getAdminBookingById);
+router.delete("/admin/:id",protect,adminOnly,deleteBooking);
 
 module.exports = router;

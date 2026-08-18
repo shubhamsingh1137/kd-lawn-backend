@@ -70,7 +70,42 @@ razorpayPaymentId: {
 razorpaySignature: {
   type: String,
 },
-    specialRequests: { type: String, trim: true },
+
+// Payment history - multiple partial payments
+paymentHistory: [
+  {
+    amount: {
+      type: Number,
+      required: true,
+      min: 1,
+    },
+
+    razorpayOrderId: {
+      type: String,
+    },
+
+    razorpayPaymentId: {
+      type: String,
+    },
+
+    razorpaySignature: {
+      type: String,
+    },
+
+    paidAt: {
+      type: Date,
+      default: Date.now,
+    },
+
+    status: {
+      type: String,
+      enum: ["success", "failed"],
+      default: "success",
+    },
+  },
+],
+
+specialRequests: { type: String, trim: true },
     adminNote:       { type: String, trim: true },
     contactName:     { type: String, required: true },
     contactPhone:    { type: String, required: true },
