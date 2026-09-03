@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const connectDB = require("./config/db");
+const chatbotRoutes = require("./routes/chatbotRoutes");
 
 dotenv.config();
 connectDB();
@@ -33,6 +34,7 @@ app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/content", require("./routes/contentRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use(require("./routes/smsRoutes"));
+app.use("/api/chatbot", chatbotRoutes);
 
 app.get("/", (req, res) => {
   res.json({ message: "Kalawati API running ✓" });
