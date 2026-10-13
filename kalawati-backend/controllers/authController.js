@@ -1,13 +1,15 @@
 // PATH: kalawati-backend/controllers/authController.js
 // CHANGE: sendOTP + verifyOTP functions add kiye — purana register/login bilkul same hai
 
-const jwt   = require("jsonwebtoken");
-const axios  = require("axios");
-const User  = require("../models/User");
+const jwt = require("jsonwebtoken");
+const axios = require("axios");
+const User = require("../models/User");
 const Booking = require("../models/Booking");
 
 const generateToken = (id) =>
-  jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRE });
+  jwt.sign({ id }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRE,
+  });
 
 // ── Helper: 6-digit OTP ─────────────────────────────────────────
 const makeOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
@@ -18,17 +20,17 @@ const sendOTPviaSMS = async (phone, otp) => {
     await axios.post(
       "https://www.fast2sms.com/dev/bulkV2",
       {
-        route:            "otp",
+        route: "otp",
         variables_values: otp,
-        flash:            0,
-        numbers:          phone,
+        flash: 0,
+        numbers: phone,
       },
       {
         headers: {
-          authorization:  process.env.FAST2SMS_API_KEY,
+          authorization: process.env.FAST2SMS_API_KEY,
           "Content-Type": "application/json",
         },
-      }
+      },
     );
     console.log(`✅ OTP SMS sent to ${phone}`);
   } catch (err) {
@@ -60,33 +62,41 @@ const sendOTP = async (req, res) => {
       });
     }
 
-    // Check user
-    const user = await User.findOne({ phone });
+    // Check booking directly by mobile number
+    const booking = await Booking.findOne({
+      contactPhone: phone,
+    }).sort("-createdAt");
 
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "No booking found for this mobile number",
+      });
+    }
+
+    // Find existing user by phone
+    let user = await User.findOne({ phone });
+
+    // If old user was deleted, create a new user
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "No booking found for this mobile number",
+      user = await User.create({
+        name: booking.contactName || "Customer",
+        phone,
+        email: booking.contactEmail || `${phone}@guest.kdlawn.in`,
+        password: Math.random().toString(36).slice(-8),
+        isGuest: true,
       });
     }
 
-    // Check booking
-    const bookingExists = await Booking.exists({
-      user: user._id,
-    });
-
-    if (!bookingExists) {
-      return res.status(404).json({
-        success: false,
-        message: "No booking found for this mobile number",
-      });
-    }
+    // Re-connect old bookings to the current user
+    await Booking.updateMany(
+      { contactPhone: phone },
+      { $set: { user: user._id } },
+    );
 
     const otp = makeOTP();
 
-    const otpExpiry = new Date(
-      Date.now() + 10 * 60 * 1000
-    );
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
     user.otp = otp;
     user.otpExpiry = otpExpiry;
@@ -108,7 +118,6 @@ const sendOTP = async (req, res) => {
         otp,
       }),
     });
-
   } catch (err) {
     console.error(err);
 
@@ -127,24 +136,35 @@ const verifyOTP = async (req, res) => {
   try {
     const { phone, otp } = req.body;
     if (!phone || !otp)
-      return res.status(400).json({ success: false, message: "Phone and OTP required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Phone and OTP required" });
 
     const user = await User.findOne({ phone }).select("+otp +otpExpiry");
     if (!user)
-      return res.status(404).json({ success: false, message: "User not found. Pehle booking karein." });
+      return res.status(404).json({
+        success: false,
+        message: "User not found. Pehle booking karein.",
+      });
     if (!user.otp)
-      return res.status(400).json({ success: false, message: "OTP request nahi ki gayi" });
+      return res
+        .status(400)
+        .json({ success: false, message: "OTP request nahi ki gayi" });
     if (user.otp !== otp)
       return res.status(400).json({ success: false, message: "Invalid OTP" });
     if (user.otpExpiry < new Date())
-      return res.status(400).json({ success: false, message: "OTP expired. Dobara bhejein." });
+      return res
+        .status(400)
+        .json({ success: false, message: "OTP expired. Dobara bhejein." });
     if (user.isBlocked)
-      return res.status(403).json({ success: false, message: "Account blocked" });
+      return res
+        .status(403)
+        .json({ success: false, message: "Account blocked" });
 
     // OTP clear karo — use ke baad
-    user.otp       = undefined;
+    user.otp = undefined;
     user.otpExpiry = undefined;
-    user.isGuest   = false;
+    user.isGuest = false;
     await user.save();
 
     res.json({
@@ -152,16 +172,18 @@ const verifyOTP = async (req, res) => {
       message: "Login successful",
       token: generateToken(user._id),
       user: {
-        _id:   user._id,
-        name:  user.name,
+        _id: user._id,
+        name: user.name,
         phone: user.phone,
         email: user.email,
-        role:  user.role,
+        role: user.role,
       },
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ success: false, message: "OTP verification failed" });
+    res
+      .status(500)
+      .json({ success: false, message: "OTP verification failed" });
   }
 };
 
@@ -172,12 +194,16 @@ const register = async (req, res) => {
   const { name, email, phone, password } = req.body;
 
   if (!name || !email || !phone || !password) {
-    return res.status(400).json({ success: false, message: "All fields are required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "All fields are required" });
   }
 
   const exists = await User.findOne({ email });
   if (exists) {
-    return res.status(400).json({ success: false, message: "Email already registered" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Email already registered" });
   }
 
   const user = await User.create({ name, email, phone, password });
@@ -186,7 +212,12 @@ const register = async (req, res) => {
     success: true,
     message: "Registration successful",
     token: generateToken(user._id),
-    user: { _id: user._id, name: user.name, email: user.email, role: user.role },
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
   });
 };
 
@@ -197,23 +228,34 @@ const login = async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
-    return res.status(400).json({ success: false, message: "Email and password required" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Email and password required" });
   }
 
   const user = await User.findOne({ email }).select("+password");
   if (!user || !(await user.matchPassword(password))) {
-    return res.status(401).json({ success: false, message: "Invalid email or password" });
+    return res
+      .status(401)
+      .json({ success: false, message: "Invalid email or password" });
   }
 
   if (user.isBlocked) {
-    return res.status(403).json({ success: false, message: "Your account has been blocked" });
+    return res
+      .status(403)
+      .json({ success: false, message: "Your account has been blocked" });
   }
 
   res.json({
     success: true,
     message: "Login successful",
     token: generateToken(user._id),
-    user: { _id: user._id, name: user.name, email: user.email, role: user.role },
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
   });
 };
 

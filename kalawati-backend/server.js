@@ -16,7 +16,7 @@ const corsOptions = {
     "https://www.kdutsav.com",
   ],
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH" ,"DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 };
 
@@ -29,6 +29,8 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/bookings", require("./routes/bookingRoutes"));
+app.use("/api/notifications", require("./routes/notificationRoutes"));
+app.use("/api/announcements", require("./routes/announcementRoutes"));
 app.use("/api/gallery", require("./routes/galleryRoutes"));
 app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/content", require("./routes/contentRoutes"));

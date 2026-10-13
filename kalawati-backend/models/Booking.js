@@ -13,7 +13,14 @@ const bookingSchema = new mongoose.Schema(
     },
     eventType: {
       type: String,
-      enum: ["Wedding", "Reception", "Engagement", "Birthday", "Corporate", "Other"],
+      enum: [
+        "Wedding",
+        "Reception",
+        "Engagement",
+        "Birthday",
+        "Corporate",
+        "Other",
+      ],
       required: true,
     },
     package: {
@@ -26,58 +33,52 @@ const bookingSchema = new mongoose.Schema(
       required: [true, "Guest count is required"],
       min: 1,
     },
+
     totalAmount: {
-  type: Number,
-  required: true,
-},
-
-status: {
-  type: String,
-  enum: [
-    "pending",
-    "confirmed",
-    "rejected",
-    "cancelled",
-    "completed",
-  ],
-  default: "pending",
-},
-
-advanceAmount: {
-  type: Number,
-  default: 0,
-},
-
-remainingAmount: {
-  type: Number,
-  default: 0,
-},
-
-paymentStatus: {
-  type: String,
-  enum: ["unpaid", "advance_paid", "fully_paid"],
-  default: "unpaid",
-},
-
-razorpayOrderId: {
-  type: String,
-},
-
-razorpayPaymentId: {
-  type: String,
-},
-
-razorpaySignature: {
-  type: String,
-},
-
-// Payment history - multiple partial payments
-paymentHistory: [
-  {
-    amount: {
       type: Number,
       required: true,
-      min: 1,
+      min: 0,
+    },
+
+    // Original booking amount before discount
+    originalAmount: {
+      type: Number,
+      min: 0,
+    },
+
+    // Discount applied by admin
+    discountAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    // Final amount after discount
+    payableAmount: {
+      type: Number,
+      min: 0,
+    },
+
+    status: {
+      type: String,
+      enum: ["pending", "confirmed", "rejected", "cancelled", "completed"],
+      default: "pending",
+    },
+
+    advanceAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    remainingAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    paymentStatus: {
+      type: String,
+      enum: ["unpaid", "advance_paid", "fully_paid"],
+      default: "unpaid",
     },
 
     razorpayOrderId: {
@@ -92,26 +93,89 @@ paymentHistory: [
       type: String,
     },
 
-    paidAt: {
-      type: Date,
-      default: Date.now,
-    },
+    paymentHistory: [
+      {
+        amount: {
+          type: Number,
+          required: true,
+          min: 1,
+        },
 
-    status: {
+        // Payment source
+        source: {
+          type: String,
+          enum: ["razorpay", "manual"],
+          default: "razorpay",
+        },
+
+        // Manual payment method
+        paymentMethod: {
+          type: String,
+          enum: ["cash", "upi", "bank_transfer", "card", "other", "razorpay"],
+        },
+
+        // Person who received manual payment
+        collectedBy: {
+          type: String,
+          trim: true,
+        },
+
+        // Manual transaction/reference number
+        transactionId: {
+          type: String,
+          trim: true,
+        },
+
+        // Admin note
+        note: {
+          type: String,
+          trim: true,
+        },
+
+        // Receipt/proof URL
+        receiptAttachment: {
+          type: String,
+        },
+
+        // Razorpay fields
+        razorpayOrderId: {
+          type: String,
+        },
+
+        razorpayPaymentId: {
+          type: String,
+        },
+
+        razorpaySignature: {
+          type: String,
+        },
+
+        paidAt: {
+          type: Date,
+          default: Date.now,
+        },
+
+        status: {
+          type: String,
+          enum: ["pending", "success", "failed"],
+          default: "success",
+        },
+      },
+    ],
+
+    specialRequests: { type: String, trim: true },
+    adminNote: { type: String, trim: true },
+    contactName: { type: String, required: true },
+    contactPhone: { type: String, required: true },
+    contactEmail: { type: String },
+    // Booking source: online website or admin walk-in
+    bookingSource: {
       type: String,
-      enum: ["success", "failed"],
-      default: "success",
+      enum: ["online", "walk_in"],
+      default: "online",
     },
   },
-],
-
-specialRequests: { type: String, trim: true },
-    adminNote:       { type: String, trim: true },
-    contactName:     { type: String, required: true },
-    contactPhone:    { type: String, required: true },
-    contactEmail:    { type: String },   
-  },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 module.exports = mongoose.model("Booking", bookingSchema);

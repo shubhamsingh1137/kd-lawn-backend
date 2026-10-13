@@ -4,7 +4,7 @@ const multer = require("multer");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
@@ -28,7 +28,18 @@ const contentStorage = new CloudinaryStorage({
   },
 });
 
-const uploadGallery  = multer({ storage: galleryStorage });
-const uploadContent  = multer({ storage: contentStorage });
+// Storage for payment receipts
+const receiptStorage = new CloudinaryStorage({
+  cloudinary,
 
-module.exports = { cloudinary, uploadGallery, uploadContent };
+  params: {
+    folder: "kalawati/payment-receipts",
+    allowed_formats: ["jpg", "jpeg", "png", "webp", "pdf"],
+  },
+});
+
+const uploadGallery = multer({ storage: galleryStorage });
+const uploadContent = multer({ storage: contentStorage });
+const uploadReceipt = multer({ storage: receiptStorage });
+
+module.exports = { cloudinary, uploadGallery, uploadContent, uploadReceipt };
