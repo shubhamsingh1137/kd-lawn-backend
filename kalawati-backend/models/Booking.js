@@ -2,6 +2,12 @@ const mongoose = require("mongoose");
 
 const bookingSchema = new mongoose.Schema(
   {
+    bookingNumber: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+    },
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -167,6 +173,11 @@ const bookingSchema = new mongoose.Schema(
     adminNote: { type: String, trim: true },
     contactName: { type: String, required: true },
     contactPhone: { type: String, required: true },
+    contactAddress: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     contactEmail: { type: String },
     // Booking source: online website or admin walk-in
     bookingSource: {

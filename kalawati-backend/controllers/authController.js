@@ -1,10 +1,8 @@
-// PATH: kalawati-backend/controllers/authController.js
-// CHANGE: sendOTP + verifyOTP functions add kiye — purana register/login bilkul same hai
-
 const jwt = require("jsonwebtoken");
-const axios = require("axios");
+const crypto = require("crypto");
 const User = require("../models/User");
 const Booking = require("../models/Booking");
+const sendOTPEmail = require("../utils/sendOTPEmail");
 
 const generateToken = (id) =>
   jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -12,7 +10,7 @@ const generateToken = (id) =>
   });
 
 // ── Helper: 6-digit OTP ─────────────────────────────────────────
-const makeOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+const makeOTP = () => crypto.randomInt(100000, 1000000).toString();
 
 // ── Helper: Fast2SMS se OTP bhejo ──────────────────────────────
 const sendOTPviaSMS = async (phone, otp) => {
@@ -44,130 +42,195 @@ const sendOTPviaSMS = async (phone, otp) => {
 // @route POST /api/auth/send-otp
 // @body  { phone: "9876543210" }
 // ──────────────────────────────────────────────────────────────────
+
 const sendOTP = async (req, res) => {
   try {
-    const { phone } = req.body;
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
 
-    if (!phone) {
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!validEmail.test(email)) {
       return res.status(400).json({
         success: false,
-        message: "Phone number required",
+        message: "Please enter a valid email address",
       });
     }
 
-    if (!/^[6-9]\d{9}$/.test(phone)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid phone number",
-      });
-    }
-
-    // Check booking directly by mobile number
+    // Find a booking using its email, not its mobile number.
     const booking = await Booking.findOne({
-      contactPhone: phone,
-    }).sort("-createdAt");
+      contactEmail: email,
+    }).sort({ createdAt: -1 });
 
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "No booking found for this mobile number",
+        message: "No booking found with this email address",
       });
     }
 
-    // Find existing user by phone
-    let user = await User.findOne({ phone });
+    const phone = String(booking.contactPhone || "").trim();
 
-    // If old user was deleted, create a new user
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Mobile number is missing from this booking",
+      });
+    }
+
+    // Email is the primary customer identity.
+    let user = await User.findOne({ email });
+
+    // Link a legacy account only when its email is missing
+    // or is the generated guest placeholder.
+    if (!user) {
+      const legacyUser = await User.findOne({ phone });
+
+      if (
+        legacyUser &&
+        (!legacyUser.email || legacyUser.email.endsWith("@guest.kdlawn.in"))
+      ) {
+        legacyUser.email = email;
+        await legacyUser.save();
+        user = legacyUser;
+      }
+    }
+
+    // Create an email-specific account if no safe match exists.
     if (!user) {
       user = await User.create({
         name: booking.contactName || "Customer",
         phone,
-        email: booking.contactEmail || `${phone}@guest.kdlawn.in`,
-        password: Math.random().toString(36).slice(-8),
+        email,
+        password: crypto.randomBytes(24).toString("hex"),
         isGuest: true,
       });
     }
 
-    // Re-connect old bookings to the current user
-    await Booking.updateMany(
-      { contactPhone: phone },
-      { $set: { user: user._id } },
-    );
+    if (user.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message: "Account blocked",
+      });
+    }
 
     const otp = makeOTP();
 
-    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
-
     user.otp = otp;
-    user.otpExpiry = otpExpiry;
+    user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
 
     await user.save();
 
-    console.log(`🔐 OTP for ${phone}: ${otp}`);
+    try {
+      await sendOTPEmail(email, otp);
+    } catch (emailError) {
+      user.otp = undefined;
+      user.otpExpiry = undefined;
+      await user.save();
 
-    if (process.env.NODE_ENV === "production") {
-      await sendOTPviaSMS(phone, otp);
+      console.error("OTP email delivery failed:", emailError.message);
+
+      return res.status(502).json({
+        success: false,
+        message: "OTP email could not be sent. Please try again later.",
+      });
     }
 
-    res.json({
+    return res.json({
       success: true,
-      message: "OTP sent successfully",
-
-      // Development only
-      ...(process.env.NODE_ENV !== "production" && {
-        otp,
-      }),
+      message: "OTP sent to your booking email address",
+      maskedEmail: email.replace(/^(.{2})[^@]*(@.*)$/, "$1***$2"),
     });
   } catch (err) {
-    console.error(err);
+    console.error("Send OTP error:", err.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "OTP send failed",
+      message: "Unable to send OTP. Please try again later.",
     });
   }
 };
-// ──────────────────────────────────────────────────────────────────
-// ✅ NEW: Verify OTP → Login
-// @route POST /api/auth/verify-otp
-// @body  { phone: "9876543210", otp: "123456" }
-// ──────────────────────────────────────────────────────────────────
+
+// Verify OTP using the email-specific account.
 const verifyOTP = async (req, res) => {
   try {
-    const { phone, otp } = req.body;
-    if (!phone || !otp)
-      return res
-        .status(400)
-        .json({ success: false, message: "Phone and OTP required" });
+    const email = String(req.body.email || "")
+      .trim()
+      .toLowerCase();
 
-    const user = await User.findOne({ phone }).select("+otp +otpExpiry");
-    if (!user)
+    const otp = String(req.body.otp || "").trim();
+
+    const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!validEmail.test(email) || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid email and 6-digit OTP are required",
+      });
+    }
+
+    // Ensure a booking exists for this email.
+    const booking = await Booking.findOne({
+      contactEmail: email,
+    }).sort({ createdAt: -1 });
+
+    if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "User not found. Pehle booking karein.",
+        message: "No booking found with this email address",
       });
-    if (!user.otp)
-      return res
-        .status(400)
-        .json({ success: false, message: "OTP request nahi ki gayi" });
-    if (user.otp !== otp)
-      return res.status(400).json({ success: false, message: "Invalid OTP" });
-    if (user.otpExpiry < new Date())
-      return res
-        .status(400)
-        .json({ success: false, message: "OTP expired. Dobara bhejein." });
-    if (user.isBlocked)
-      return res
-        .status(403)
-        .json({ success: false, message: "Account blocked" });
+    }
 
-    // OTP clear karo — use ke baad
+    // Look up the OTP by email, not by phone.
+    const user = await User.findOne({ email }).select("+otp +otpExpiry");
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer account not found. Please request a new OTP.",
+      });
+    }
+
+    if (user.isBlocked) {
+      return res.status(403).json({
+        success: false,
+        message: "Account blocked",
+      });
+    }
+
+    if (!user.otp || !user.otpExpiry) {
+      return res.status(400).json({
+        success: false,
+        message: "Please request a new OTP",
+      });
+    }
+
+    if (user.otpExpiry < new Date()) {
+      user.otp = undefined;
+      user.otpExpiry = undefined;
+      await user.save();
+
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired. Please request a new OTP.",
+      });
+    }
+
+    if (user.otp !== otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
     user.otp = undefined;
     user.otpExpiry = undefined;
     user.isGuest = false;
+
     await user.save();
 
-    res.json({
+    return res.json({
       success: true,
       message: "Login successful",
       token: generateToken(user._id),
@@ -180,10 +243,12 @@ const verifyOTP = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error(err);
-    res
-      .status(500)
-      .json({ success: false, message: "OTP verification failed" });
+    console.error("Verify OTP error:", err.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "OTP verification failed",
+    });
   }
 };
 

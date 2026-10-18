@@ -1,4 +1,4 @@
-const jwt  = require("jsonwebtoken");
+const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 // Protect routes — verify JWT
@@ -13,7 +13,9 @@ const protect = async (req, res, next) => {
   }
 
   if (!token) {
-    return res.status(401).json({ success: false, message: "Not authorized, no token" });
+    return res
+      .status(401)
+      .json({ success: false, message: "Not authorized, no token" });
   }
 
   try {
@@ -21,28 +23,46 @@ const protect = async (req, res, next) => {
     req.user = await User.findById(decoded.id).select("-password");
 
     if (!req.user) {
-      return res.status(401).json({ success: false, message: "User not found" });
+      return res
+        .status(401)
+        .json({ success: false, message: "User not found" });
     }
     if (req.user.isBlocked) {
-      return res.status(403).json({ success: false, message: "Your account has been blocked" });
+      return res
+        .status(403)
+        .json({ success: false, message: "Your account has been blocked" });
     }
 
     next();
   } catch (error) {
-    return res.status(401).json({ success: false, message: "Token invalid or expired" });
+    return res
+      .status(401)
+      .json({ success: false, message: "Token invalid or expired" });
   }
 };
 
 const optionalAuth = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(" ")[1];
-    if (token) {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.user = await User.findById(decoded.id).select("-password");
+    const authHeader = req.headers.authorization;
+
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const token = authHeader.split(" ")[1];
+
+      if (token) {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+        req.user = await User.findById(decoded.id).select("-password");
+
+        if (req.user?.isBlocked) {
+          req.user = null;
+        }
+      }
     }
-  } catch (_) {
-    // Token nahi hai ya invalid — theek hai, guest hai
+  } catch (error) {
+    // Missing or invalid token: continue as a guest.
+    req.user = null;
   }
+
   next();
 };
 

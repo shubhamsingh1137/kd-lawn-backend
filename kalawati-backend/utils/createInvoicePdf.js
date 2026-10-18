@@ -95,7 +95,7 @@ const createInvoicePdf = (booking) => {
         `Name: ${booking.contactName || booking.user?.name || "N/A"}`,
         `Email: ${booking.contactEmail || booking.user?.email || "N/A"}`,
         `Phone: ${booking.contactPhone || booking.user?.phone || "N/A"}`,
-        `Booking ID: ${String(booking._id || "N/A")}`,
+        `Booking ID: ${booking.bookingNumber || String(booking._id || "N/A")}`,
         `Event: ${booking.eventType || "N/A"}`,
         `Event Date: ${date(booking.eventDate)}`,
         `Package: ${booking.package?.name || "N/A"}`,
@@ -105,6 +105,27 @@ const createInvoicePdf = (booking) => {
       customerDetails.forEach((line) => {
         doc.text(line);
       });
+
+      // Special Requests
+      const specialRequests = String(booking.specialRequests || "").trim();
+
+      if (specialRequests) {
+        doc.moveDown(0.5);
+        doc
+          .font("Helvetica-Bold")
+          .fontSize(11)
+          .fillColor("#222222")
+          .text("Special Requests");
+
+        doc
+          .font("Helvetica")
+          .fontSize(10)
+          .fillColor("#444444")
+          .text(specialRequests, {
+            width: 500,
+            lineGap: 3,
+          });
+      }
 
       doc.moveDown(1);
 

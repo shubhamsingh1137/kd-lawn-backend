@@ -1,4 +1,14 @@
 const Booking = require("../models/Booking");
+const BookingCounter = require("../models/BookingCounter");
+const isEventDateBooked = async (eventDate) => {
+  const start = new Date(`${eventDate}T00:00:00.000Z`);
+  const end = new Date(`${eventDate}T23:59:59.999Z`);
+
+  return Booking.exists({
+    eventDate: { $gte: start, $lte: end },
+    status: { $in: ["pending", "confirmed"] },
+  });
+};
 const User = require("../models/User");
 const Package = require("../models/Package");
 const Notification = require("../models/Notification");
@@ -22,7 +32,41 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
+const generateBookingNumber = async (createdAt = new Date()) => {
+  const dateKey = [
+    String(createdAt.getDate()).padStart(2, "0"),
+    String(createdAt.getMonth() + 1).padStart(2, "0"),
+    String(createdAt.getFullYear()).slice(-2),
+  ].join("");
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const counter = await BookingCounter.findOneAndUpdate(
+        { dateKey },
+        {
+          $inc: { sequence: 1 },
+          $setOnInsert: { dateKey },
+        },
+        {
+          new: true,
+          upsert: true,
+          setDefaultsOnInsert: true,
+        },
+      );
+
+      return `KDL-${dateKey}-${String(counter.sequence).padStart(4, "0")}`;
+    } catch (error) {
+      if (error.code !== 11000 || attempt === 2) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("Unable to generate booking number");
+};
+
 // @desc  Create booking — bilkul same as before
+
 const createBooking = async (req, res) => {
   try {
     const {
@@ -37,21 +81,77 @@ const createBooking = async (req, res) => {
       totalAmount,
     } = req.body;
 
+    if (
+      !contactName?.trim() ||
+      !contactPhone?.trim() ||
+      !contactEmail?.trim() ||
+      !eventDate ||
+      !eventType ||
+      !packageId
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please fill all required booking details.",
+      });
+    }
+
+    const alreadyBooked = await isEventDateBooked(eventDate);
+
+    if (alreadyBooked) {
+      return res.status(409).json({
+        success: false,
+        message: "This date is already booked. Please try another date.",
+      });
+    }
+
+    const normalizedEmail = contactEmail.trim().toLowerCase();
+
     let userId = req.user?._id;
+
     if (!userId) {
-      let guestUser = await User.findOne({ phone: contactPhone });
-      if (!guestUser) {
-        const randomPassword = Math.random().toString(36).slice(-8);
+      // Find customer by email first
+      let customer = await User.findOne({
+        email: normalizedEmail,
+      });
+
+      // Check an older guest account using phone
+      if (!customer) {
+        const legacyCustomer = await User.findOne({
+          phone: contactPhone.trim(),
+        });
+
+        const legacyEmail = String(legacyCustomer?.email || "")
+          .trim()
+          .toLowerCase();
+
+        // Link only accounts with no real email or a guest placeholder
+        if (
+          legacyCustomer &&
+          (!legacyEmail || legacyEmail.endsWith("@guest.kdlawn.in"))
+        ) {
+          legacyCustomer.email = normalizedEmail;
+          legacyCustomer.name = contactName.trim();
+
+          await legacyCustomer.save();
+          customer = legacyCustomer;
+        }
+      }
+
+      // Create a new guest account if needed
+      if (!customer) {
+        const randomPassword = crypto.randomBytes(12).toString("hex");
         const hashedPassword = await bcrypt.hash(randomPassword, 10);
-        guestUser = await User.create({
-          name: contactName,
-          phone: contactPhone,
-          email: contactEmail || `${contactPhone}@guest.kdlawn.in`,
+
+        customer = await User.create({
+          name: contactName.trim(),
+          phone: contactPhone.trim(),
+          email: normalizedEmail,
           password: hashedPassword,
           isGuest: true,
         });
       }
-      userId = guestUser._id;
+
+      userId = customer._id;
     }
 
     const initialAmount = Number(totalAmount);
@@ -62,8 +162,9 @@ const createBooking = async (req, res) => {
         message: "Invalid booking amount",
       });
     }
-
+    const bookingNumber = await generateBookingNumber();
     const booking = await Booking.create({
+      bookingNumber,
       user: userId,
       eventDate,
       eventType,
@@ -72,13 +173,11 @@ const createBooking = async (req, res) => {
       specialRequests,
       contactName,
       contactPhone,
-      contactEmail: contactEmail || "",
-
+      contactEmail: normalizedEmail,
       totalAmount: initialAmount,
       originalAmount: initialAmount,
       discountAmount: 0,
       payableAmount: initialAmount,
-
       status: "pending",
       advanceAmount: 0,
       remainingAmount: initialAmount,
@@ -88,24 +187,69 @@ const createBooking = async (req, res) => {
 
     const populated = await booking.populate("package");
 
-    if (booking.contactEmail) {
-      await sendEmail({
-        to: booking.contactEmail,
-        subject: "Booking Request Received - KD Utsav Lawn",
-        html: bookingConfirmEmail(populated),
+    // Admin panel notification
+    try {
+      await Notification.create({
+        type: "booking",
+        title: "New Booking Request",
+        message: `${booking.contactName} submitted a new booking request. Approval is pending.`,
+        booking: booking._id,
+        customerName: booking.contactName || "",
+        customerPhone: booking.contactPhone || "",
+        customerEmail: booking.contactEmail || "",
+        status: "unread",
       });
+
+      console.log("Booking notification created:", booking._id.toString());
+    } catch (notificationError) {
+      console.error("Booking notification error:", notificationError);
     }
 
-    await sendEmail({
-      to: process.env.ADMIN_EMAIL,
-      subject: "New Booking Request - KD Utsav Lawn",
-      html: adminBookingAlertEmail(populated),
-    });
+    // Customer email
+    if (booking.contactEmail) {
+      try {
+        await sendEmail({
+          to: booking.contactEmail,
+          subject: "Booking Request Received - KD Utsav Lawn",
+          html: bookingConfirmEmail(populated),
+        });
 
-    res.status(201).json({ success: true, booking: populated });
+        console.log("Customer booking email sent:", booking.contactEmail);
+      } catch (emailError) {
+        console.error("Customer booking email error:", emailError.message);
+      }
+    }
+
+    // Admin email
+    try {
+      if (!process.env.ADMIN_EMAIL) {
+        throw new Error("ADMIN_EMAIL is not configured");
+      }
+
+      await sendEmail({
+        to: process.env.ADMIN_EMAIL,
+        subject: "New Booking Request - KD Utsav Lawn",
+        html: adminBookingAlertEmail(populated),
+      });
+
+      console.log("Admin booking email sent");
+    } catch (emailError) {
+      console.error("Admin booking email error:", emailError.message);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Booking request submitted successfully",
+      booking: populated,
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Booking failed", error: err.message });
+    console.error("Create booking error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Booking failed",
+      error: err.message,
+    });
   }
 };
 
@@ -123,6 +267,7 @@ const createWalkInBooking = async (req, res) => {
       contactName,
       contactPhone,
       contactEmail,
+      contactAddress,
       eventType,
       eventDate,
       package: packageId,
@@ -148,6 +293,15 @@ const createWalkInBooking = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Please fill all required booking details.",
+      });
+    }
+
+    const alreadyBooked = await isEventDateBooked(eventDate);
+
+    if (alreadyBooked) {
+      return res.status(409).json({
+        success: false,
+        message: "This date is already booked. Please try another date.",
       });
     }
 
@@ -249,13 +403,15 @@ const createWalkInBooking = async (req, res) => {
             },
           ]
         : [];
-
+    const bookingNumber = await generateBookingNumber();
     const booking = await Booking.create({
       user: customer._id,
       contactName: contactName.trim(),
       contactPhone: contactPhone.trim(),
       contactEmail: contactEmail.trim(),
+      contactAddress: contactAddress?.trim() || "",
       eventType,
+      bookingNumber,
       eventDate,
       package: selectedPackage._id,
       guestCount: guests,
@@ -447,10 +603,9 @@ const updateBookingStatus = async (req, res) => {
 
         await sendEmail({
           to: booking.contactEmail,
-          subject: `Booking Confirmed – KD Utsav Lawn | Booking ID: ${booking._id
-            .toString()
-            .slice(-8)
-            .toUpperCase()}`,
+          subject: `Booking Confirmed – KD Utsav Lawn | Booking ID: ${
+            booking.bookingNumber || booking._id.toString()
+          }`,
           html: confirmedPaymentLinkEmail(booking, payLink),
         });
       } else if (status === "rejected") {
@@ -499,74 +654,121 @@ const getBookingStats = async (req, res) => {
   res.json({ success: true, total, stats });
 };
 
-// @desc  Track by phone — same
+// @desc  Track by email — same
 // @desc Track bookings - OTP verified user only
+
 const trackBookingByPhone = async (req, res) => {
   try {
-    // protect middleware ke through authenticated user milega
-    const userId = req.user?._id;
+    // Email must come from the authenticated, OTP-verified user.
+    const email = String(req.user?.email || "")
+      .trim()
+      .toLowerCase();
 
-    if (!userId) {
+    if (!req.user?._id || !email || email.endsWith("@guest.kdlawn.in")) {
       return res.status(401).json({
         success: false,
-        message: "Please verify OTP first",
+        message: "Please verify your email OTP first.",
       });
     }
 
-    // Sirf logged-in/OTP verified user ki bookings
-    const bookings = await Booking.find({ user: userId })
-      .populate("package", "name price")
-      .sort("-createdAt")
-      .select("-user");
+    // Escape special regex characters in the verified email.
+    const escapedEmail = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    res.json({
+    // Fetch every booking associated with this email,
+    // including older bookings linked to a different user ID.
+    const bookings = await Booking.find({
+      contactEmail: {
+        $regex: `^${escapedEmail}$`,
+        $options: "i",
+      },
+    })
+      .populate("package", "name price")
+      .sort({ createdAt: -1 })
+      .select("-user -razorpaySignature");
+
+    return res.status(200).json({
       success: true,
       bookings,
     });
   } catch (err) {
-    console.error("Track booking error:", err);
+    console.error("Track booking by email error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Unable to fetch bookings",
+      message: "Unable to fetch bookings.",
     });
   }
 };
 
 // @desc  Booked dates — same
 const getBookedDates = async (req, res) => {
-  const bookings = await Booking.find(
-    { status: { $in: ["pending", "confirmed"] } },
-    { eventDate: 1, _id: 0 },
-  );
-  const dates = bookings.map((b) => b.eventDate.toISOString().split("T")[0]);
-  res.json({ success: true, dates });
+  try {
+    const bookings = await Booking.find(
+      {
+        status: { $in: ["pending", "confirmed"] },
+      },
+      { eventDate: 1, _id: 0 },
+    );
+
+    const dates = bookings.map(
+      (booking) => booking.eventDate.toISOString().split("T")[0],
+    );
+
+    return res.json({
+      success: true,
+      dates,
+    });
+  } catch (error) {
+    console.error("Get booked dates error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch booked dates",
+    });
+  }
 };
 
 const getBookingById = async (req, res) => {
   try {
-    const booking = await Booking.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-    })
+    const email = String(req.user?.email || "")
+      .trim()
+      .toLowerCase();
+
+    const booking = await Booking.findById(req.params.id)
       .populate("package", "name price")
       .select("-razorpaySignature");
 
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "Booking not found or access denied",
+        message: "Booking not found",
       });
     }
 
-    res.json({
+    const bookingEmail = String(booking.contactEmail || "")
+      .trim()
+      .toLowerCase();
+
+    if (
+      !email ||
+      email.endsWith("@guest.kdlawn.in") ||
+      !bookingEmail ||
+      bookingEmail !== email
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "This booking does not belong to your verified email",
+      });
+    }
+
+    return res.json({
       success: true,
       booking,
     });
   } catch (err) {
     console.error("Get booking error:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Unable to fetch booking",
     });
@@ -625,16 +827,37 @@ const createPaymentOrder = async (req, res) => {
       });
     }
 
-    // Booking sirf logged-in user ki honi chahiye
-    const booking = await Booking.findOne({
-      _id: bookingId,
-      user: req.user._id,
-    }).populate("package", "name price");
+    // Verify booking using the logged-in, OTP-verified email
+    const email = String(req.user?.email || "")
+      .trim()
+      .toLowerCase();
+
+    const booking = await Booking.findById(bookingId).populate(
+      "package",
+      "name price",
+    );
 
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "Booking not found or access denied",
+        message: "Booking not found",
+      });
+    }
+
+    // Match booking email with the verified user's email
+    const bookingEmail = String(booking.contactEmail || "")
+      .trim()
+      .toLowerCase();
+
+    if (
+      !email ||
+      email.endsWith("@guest.kdlawn.in") ||
+      !bookingEmail ||
+      bookingEmail !== email
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "This booking does not belong to your verified email",
       });
     }
 
@@ -751,11 +974,47 @@ const verifyPayment = async (req, res) => {
     }
 
     // Booking find
-    const booking = await Booking.findOne({
-      _id: bookingId,
-      user: req.user._id,
-    }).populate("package", "name price");
+    // Find booking by ID, then verify ownership using email
+    const booking = await Booking.findById(bookingId).populate(
+      "package",
+      "name price",
+    );
 
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found",
+      });
+    }
+
+    // Verify booking belongs to the authenticated customer's email
+    const customerEmail = String(req.user?.email || "")
+      .trim()
+      .toLowerCase();
+
+    const bookingEmail = String(booking.contactEmail || "")
+      .trim()
+      .toLowerCase();
+
+    if (
+      !customerEmail ||
+      customerEmail.endsWith("@guest.kdlawn.in") ||
+      !bookingEmail ||
+      customerEmail !== bookingEmail
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "This booking does not belong to your verified email",
+      });
+    }
+
+    // Verify this is the order created for this booking
+    if (booking.razorpayOrderId !== razorpay_order_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Razorpay order does not match this booking",
+      });
+    }
     if (!booking) {
       return res.status(404).json({
         success: false,
@@ -910,7 +1169,8 @@ const verifyPayment = async (req, res) => {
         html: paymentReceiptEmail(booking, paidAmount, "partial"),
         attachments: [
           {
-            filename: `KD-Utsav-Invoice-${booking._id}.pdf`,
+            filename: `KD-Utsav-Invoice-${booking.bookingNumber || booking._id}.pdf`,
+
             content: invoicePdf,
             contentType: "application/pdf",
           },
@@ -1002,6 +1262,13 @@ const addManualPayment = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Booking not found",
+      });
+    }
+    // Only confirmed bookings can receive manual payments
+    if (booking.status !== "confirmed") {
+      return res.status(400).json({
+        success: false,
+        message: "Please confirm the booking before adding a payment.",
       });
     }
 
@@ -1111,7 +1378,7 @@ const addManualPayment = async (req, res) => {
 
       const attachments = [
         {
-          filename: `KD-Utsav-Invoice-${booking._id}.pdf`,
+          filename: `KD-Utsav-Invoice-${booking.bookingNumber || booking._id}.pdf`,
           content: invoicePdf,
           contentType: "application/pdf",
         },
@@ -1231,6 +1498,12 @@ const submitQRPayment = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Booking not found",
+      });
+    }
+    if (booking.status !== "confirmed") {
+      return res.status(400).json({
+        success: false,
+        message: "Only confirmed bookings can receive QR payments.",
       });
     }
 
@@ -1390,6 +1663,12 @@ const approveQRPayment = async (req, res) => {
         message: "Booking not found",
       });
     }
+    if (booking.status !== "confirmed") {
+      return res.status(400).json({
+        success: false,
+        message: "Only confirmed bookings can be modified for payments.",
+      });
+    }
 
     const payment = booking.paymentHistory.id(paymentId);
 
@@ -1529,6 +1808,12 @@ const rejectQRPayment = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Booking not found",
+      });
+    }
+    if (booking.status !== "confirmed") {
+      return res.status(400).json({
+        success: false,
+        message: "Only confirmed bookings can be modified for payments.",
       });
     }
 
@@ -1749,7 +2034,7 @@ const getAdminBookingInvoice = async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `inline; filename="KD-Utsav-Invoice-${booking._id}.pdf"`,
+      `inline; filename="KD-Utsav-Invoice-${booking.bookingNumber || booking._id}.pdf"`,
     );
     res.setHeader("Cache-Control", "no-store");
 
