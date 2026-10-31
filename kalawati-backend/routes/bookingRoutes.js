@@ -46,7 +46,14 @@ router.post("/verify-payment", protect, verifyPayment);
 // User routes
 router.post("/", optionalAuth, createBooking);
 router.get("/my", protect, getMyBookings);
-router.patch("/:id/cancel", protect, cancelBooking);
+// Customer cancellation disabled.
+// Cancellation will only be allowed through the admin dashboard.
+router.patch("/:id/cancel", protect, (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: "Please contact the lawn administration to cancel your booking.",
+  });
+});
 
 // Admin routes
 // Create Walk-in Booking
@@ -90,6 +97,8 @@ router.patch(
 );
 router.patch("/admin/:id/discount", protect, adminOnly, updateBookingDiscount);
 router.patch("/admin/:id/status", protect, adminOnly, updateBookingStatus);
+// Admin-only booking cancellation
+router.patch("/admin/:id/cancel", protect, adminOnly, cancelBooking);
 router.get("/admin/:id", protect, adminOnly, getAdminBookingById);
 // Admin invoice PDF - reuse existing invoice generator
 router.get("/admin/:id/invoice", protect, adminOnly, getAdminBookingInvoice);

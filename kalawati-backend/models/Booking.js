@@ -168,6 +168,57 @@ const bookingSchema = new mongoose.Schema(
         },
       },
     ],
+    // Cancellation details
+    cancellationDetails: {
+      cancelledAt: {
+        type: Date,
+      },
+
+      cancelledBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+
+      amountPaidAtCancellation: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      nonRefundableAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      amountToSettle: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      settlementStatus: {
+        type: String,
+        enum: ["not_required", "pending", "settled"],
+        default: "not_required",
+      },
+
+      settledAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      settledAt: {
+        type: Date,
+      },
+
+      reason: {
+        type: String,
+        trim: true,
+        default: "",
+      },
+    },
 
     specialRequests: { type: String, trim: true },
     adminNote: { type: String, trim: true },

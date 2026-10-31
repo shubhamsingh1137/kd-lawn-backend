@@ -24,8 +24,10 @@ const {
   adminBookingAlertEmail,
   confirmedPaymentLinkEmail, // ✅ NEW
   paymentReceiptEmail, // ✅ NEW
-  adminPaymentAlertEmail, // ✅ NEW
+  adminPaymentAlertEmail,
+  bookingCancellationEmail, // ✅ NEW
 } = require("../utils/sendEmail");
+const createCancellationPdf = require("../utils/createCancellationPdf");
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
@@ -467,23 +469,126 @@ const createWalkInBooking = async (req, res) => {
 };
 
 // @desc  Cancel booking — same
+// @desc Admin cancels a booking and records cancellation settlement
 const cancelBooking = async (req, res) => {
-  const booking = await Booking.findOne({
-    _id: req.params.id,
-    user: req.user._id,
-  });
-  if (!booking)
-    return res
-      .status(404)
-      .json({ success: false, message: "Booking not found" });
-  if (["confirmed", "completed"].includes(booking.status))
-    return res.status(400).json({
-      success: false,
-      message: "Cannot cancel a confirmed booking. Contact admin.",
+  try {
+    const { reason = "" } = req.body;
+
+    const booking = await Booking.findById(req.params.id).populate(
+      "package",
+      "name price",
+    );
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Booking not found.",
+      });
+    }
+
+    if (booking.status === "cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "This booking is already cancelled.",
+      });
+    }
+
+    if (booking.status === "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "A completed booking cannot be cancelled.",
+      });
+    }
+
+    // Count successful payments only.
+    const successfulPayments = (booking.paymentHistory || []).filter(
+      (payment) => payment.status === "success",
+    );
+
+    const paymentHistoryTotal = successfulPayments.reduce(
+      (sum, payment) => sum + Number(payment.amount || 0),
+      0,
+    );
+
+    // Compatibility fallback for older bookings that may not have
+    // a complete paymentHistory array.
+    const amountPaid = Math.max(
+      paymentHistoryTotal,
+      Number(booking.advanceAmount || 0),
+    );
+
+    // Maximum non-refundable amount is ₹11,000,
+    // capped at the amount actually paid.
+    const nonRefundableAmount = Math.min(amountPaid, 11000);
+
+    // Amount exceeding ₹11,000 must be settled through the office.
+    const amountToSettle = Math.max(amountPaid - nonRefundableAmount, 0);
+
+    booking.status = "cancelled";
+
+    booking.cancellationDetails = {
+      cancelledAt: new Date(),
+      cancelledBy: req.user._id,
+      amountPaidAtCancellation: amountPaid,
+      nonRefundableAmount,
+      amountToSettle,
+      settlementStatus: amountToSettle > 0 ? "pending" : "not_required",
+      settledAmount: 0,
+      reason: String(reason).trim(),
+    };
+
+    await booking.save();
+    // Send cancellation email and PDF after saving cancellation.
+    let cancellationEmailSent = false;
+
+    if (booking.contactEmail) {
+      try {
+        const cancellationPdf = await createCancellationPdf(booking);
+
+        await sendEmail({
+          to: booking.contactEmail,
+          subject: `Booking Cancelled - KD Utsav Lawn | Booking ID: ${
+            booking.bookingNumber || booking._id.toString()
+          }`,
+          html: bookingCancellationEmail(booking),
+          attachments: [
+            {
+              filename: `Cancellation-Statement-${booking.bookingNumber || booking._id}.pdf`,
+              content: cancellationPdf,
+              contentType: "application/pdf",
+            },
+          ],
+        });
+
+        cancellationEmailSent = true;
+      } catch (emailError) {
+        // Cancellation is already saved. Do not undo it if email fails.
+        console.error(
+          "Booking cancelled, but cancellation email/PDF failed:",
+          emailError.message,
+        );
+      }
+    }
+    return res.status(200).json({
+      success: true,
+      message: "Booking cancelled successfully.",
+      cancellationEmailSent,
+      booking,
+      cancellationSummary: {
+        amountPaid,
+        nonRefundableAmount,
+        amountToSettle,
+        settlementStatus: amountToSettle > 0 ? "pending" : "not_required",
+      },
     });
-  booking.status = "cancelled";
-  await booking.save();
-  res.json({ success: true, message: "Booking cancelled" });
+  } catch (error) {
+    console.error("Admin cancellation error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to cancel booking.",
+    });
+  }
 };
 
 // @desc  Get all bookings (admin) — same
@@ -507,14 +612,14 @@ const getAllBookings = async (req, res) => {
 const updateBookingStatus = async (req, res) => {
   try {
     const { status, adminNote } = req.body;
+    if (status === "cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: "Please use the dedicated admin cancellation endpoint.",
+      });
+    }
 
-    const allowedStatuses = [
-      "pending",
-      "confirmed",
-      "rejected",
-      "cancelled",
-      "completed",
-    ];
+    const allowedStatuses = ["pending", "confirmed", "rejected", "completed"];
 
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
@@ -640,18 +745,88 @@ const updateBookingStatus = async (req, res) => {
 };
 
 // @desc  Get booking stats — same
+
 const getBookingStats = async (req, res) => {
-  const stats = await Booking.aggregate([
-    {
-      $group: {
-        _id: "$status",
-        count: { $sum: 1 },
-        revenue: { $sum: "$totalAmount" },
+  try {
+    const stats = await Booking.aggregate([
+      {
+        $addFields: {
+          successfulPaymentTotal: {
+            $sum: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: { $ifNull: ["$paymentHistory", []] },
+                    as: "payment",
+                    cond: { $eq: ["$$payment.status", "success"] },
+                  },
+                },
+                as: "payment",
+                in: { $ifNull: ["$$payment.amount", 0] },
+              },
+            },
+          },
+        },
       },
-    },
-  ]);
-  const total = await Booking.countDocuments();
-  res.json({ success: true, total, stats });
+      {
+        $addFields: {
+          // Fallback for older records that used advanceAmount.
+          actualCollected: {
+            $max: [
+              "$successfulPaymentTotal",
+              { $ifNull: ["$advanceAmount", 0] },
+            ],
+          },
+        },
+      },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+
+          // Contract/booking value, NOT cash collected.
+          bookingValue: { $sum: { $ifNull: ["$totalAmount", 0] } },
+
+          // Actual collection estimate based on successful payments.
+          actualCollected: { $sum: "$actualCollected" },
+
+          nonRefundableAmount: {
+            $sum: {
+              $ifNull: ["$cancellationDetails.nonRefundableAmount", 0],
+            },
+          },
+
+          amountToSettle: {
+            $sum: {
+              $ifNull: ["$cancellationDetails.amountToSettle", 0],
+            },
+          },
+
+          settledAmount: {
+            $sum: {
+              $ifNull: ["$cancellationDetails.settledAmount", 0],
+            },
+          },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const total = await Booking.countDocuments();
+
+    return res.status(200).json({
+      success: true,
+      total,
+      stats,
+    });
+  } catch (error) {
+    console.error("Get booking stats error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch booking statistics.",
+    });
+  }
 };
 
 // @desc  Track by email — same

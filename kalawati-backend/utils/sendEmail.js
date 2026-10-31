@@ -2106,6 +2106,77 @@ const adminPaymentAlertEmail = (booking, paidAmount, type, payment = {}) => {
     </div>
   `;
 };
+// Cancellation email sent to the customer
+const bookingCancellationEmail = (booking) => {
+  const details = booking.cancellationDetails || {};
+
+  const money = (amount) => `₹${Number(amount || 0).toLocaleString("en-IN")}`;
+
+  const eventDate = booking.eventDate
+    ? new Date(booking.eventDate).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      })
+    : "N/A";
+
+  const cancelledDate = details.cancelledAt
+    ? new Date(details.cancelledAt).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      })
+    : new Date().toLocaleDateString("en-IN");
+
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;border:1px solid #eee;border-radius:10px;overflow:hidden;color:#333;">
+      <div style="background:#7c2d12;color:white;padding:24px;text-align:center;">
+        <h2 style="margin:0;">KD Utsav Lawn</h2>
+        <p style="margin:8px 0 0;">Booking Cancellation Confirmation</p>
+      </div>
+
+      <div style="padding:24px;">
+        <p>Dear ${booking.contactName || "Customer"},</p>
+
+        <p>
+          This email confirms that your booking has been cancelled by
+          the KD Utsav Lawn administration.
+        </p>
+
+        <p><strong>Booking details</strong></p>
+        <p>
+          Booking ID: ${booking.bookingNumber || booking._id}<br/>
+          Event: ${booking.eventType || "N/A"}<br/>
+          Event Date: ${eventDate}<br/>
+          Cancellation Date: ${cancelledDate}
+        </p>
+
+        <p><strong>Cancellation payment summary</strong></p>
+        <p>
+          Amount received: ${money(details.amountPaidAtCancellation)}<br/>
+          Non-refundable amount: ${money(details.nonRefundableAmount)}<br/>
+          Amount pending office settlement: ${money(details.amountToSettle)}
+        </p>
+
+        ${
+          Number(details.amountToSettle || 0) > 0
+            ? `<p>
+                The amount pending settlement can be discussed and settled
+                through the KD Utsav Lawn office. Please contact the office
+                to confirm the settlement process.
+              </p>`
+            : ""
+        }
+
+        <p>
+          Please find the cancellation statement attached to this email.
+        </p>
+
+        <p>Regards,<br/>KD Utsav Lawn Team</p>
+      </div>
+    </div>
+  `;
+};
 
 module.exports = {
   sendEmail,
@@ -2117,4 +2188,5 @@ module.exports = {
   confirmedPaymentLinkEmail,
   paymentReceiptEmail,
   adminPaymentAlertEmail,
+  bookingCancellationEmail,
 };
