@@ -443,13 +443,34 @@ const createWalkInBooking = async (req, res) => {
       .populate("package", "name price")
       .populate("user", "name email phone");
 
-    // Send a confirmation email to the customer only.
+    // Send confirmation email with invoice PDF attachment
     if (populatedBooking.contactEmail) {
-      await sendEmail({
-        to: populatedBooking.contactEmail,
-        subject: "Walk-in Booking Confirmed - KD Utsav Lawn",
-        html: bookingBillEmail(populatedBooking, "confirmed"),
-      });
+      try {
+        const invoicePdf = await createInvoicePdf(populatedBooking);
+
+        await sendEmail({
+          to: populatedBooking.contactEmail,
+          subject: "Walk-in Booking Confirmed - KD Utsav Lawn",
+          html: bookingBillEmail(populatedBooking, "confirmed"),
+          attachments: [
+            {
+              filename: `KD-Utsav-Invoice-${populatedBooking.bookingNumber || populatedBooking._id}.pdf`,
+              content: invoicePdf,
+              contentType: "application/pdf",
+            },
+          ],
+        });
+
+        console.log(
+          "Walk-in booking confirmation email with invoice sent:",
+          populatedBooking.contactEmail,
+        );
+      } catch (emailError) {
+        console.error(
+          "Walk-in booking email/invoice attachment failed:",
+          emailError,
+        );
+      }
     }
 
     return res.status(201).json({
