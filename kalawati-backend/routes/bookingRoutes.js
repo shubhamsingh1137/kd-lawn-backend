@@ -6,6 +6,7 @@ const {
   getMyBookings,
   cancelBooking,
   getAllBookings,
+  exportAllBookings,
   updateBookingStatus,
   getBookingStats,
   trackBookingByPhone,
@@ -59,6 +60,7 @@ router.patch("/:id/cancel", protect, (req, res) => {
 // Create Walk-in Booking
 router.post("/admin/walk-in", protect, adminOnly, createWalkInBooking);
 router.get("/admin/all", protect, adminOnly, getAllBookings);
+router.get("/admin/export-all", protect, adminOnly, exportAllBookings);
 router.get("/admin/stats", protect, adminOnly, getBookingStats);
 router.post(
   "/admin/:id/manual-payment",

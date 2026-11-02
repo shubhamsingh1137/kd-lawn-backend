@@ -625,6 +625,29 @@ const getAllBookings = async (req, res) => {
     .limit(Number(limit));
   res.json({ success: true, total, page: Number(page), bookings });
 };
+// @desc Export ALL bookings for admin Excel export
+const exportAllBookings = async (req, res) => {
+  try {
+    const bookings = await Booking.find({})
+      .populate("user", "name email phone")
+      .populate("package", "name price")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      total: bookings.length,
+      bookings,
+    });
+  } catch (error) {
+    console.error("Export all bookings error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to export bookings.",
+    });
+  }
+};
 
 // ✅ CHANGED: updateBookingStatus
 // Sirf ek cheez badli: jab admin "confirmed" kare toh
@@ -2251,6 +2274,7 @@ module.exports = {
   getMyBookings,
   cancelBooking,
   getAllBookings,
+  exportAllBookings,
   updateBookingStatus,
   getBookingStats,
   trackBookingByPhone,
